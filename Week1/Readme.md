@@ -487,7 +487,7 @@ This is **non-trivial** and not ideal unless you're developing on real hardware.
 
 
 
-### 🔧 Example: UART Write in Bare-Metal C
+### Example: UART Write in Bare-Metal C
 
 If you're using SiFive's UART at `0x10000000`:
 
@@ -514,6 +514,125 @@ int main() {
 ![Screenshot from 2025-06-04 17-43-17](https://github.com/user-attachments/assets/23563a26-d3b0-4197-96dd-f277426db65e)
 
 ---
+#  **8. <ins>Exploring GCC Optimisation</ins>**
+
+
+
+###  Step 1: Create a Minimal C File
+
+```c
+// hello_opt.c
+int square(int x) {
+    int y = x * x;
+    return y;
+}
+
+int main() {
+    int result = square(5);
+    return result;
+}
+```
+
+
+
+###  Step 2: Compile with -O0 and -O2
+
+```bash
+riscv32-unknown-elf-gcc -S -O0 -o hello_O0.s hello_opt.c
+riscv32-unknown-elf-gcc -S -O2 -o hello_O2.s hello_opt.c
+```
+
+* `-S`: Generate assembly code (`.s` file)
+* `-O0`: No optimization (default)
+* `-O2`: High optimization (inlines, removes dead code, etc.)
+
+
+
+###  Step 3: Compare the Outputs
+
+You can run:
+
+```bash
+diff hello_O0.s hello_O2.s
+```
+
+Or inspect manually.
+
+
+
+###  What You'll Notice:
+
+#### 🔴 `-O0` (No Optimization):
+
+* Function calls are preserved (e.g., `square()` is called from `main()`)
+* Variables are stored in the stack (e.g., `x`, `y`, `result`)
+* Prologue/epilogue code is longer (push/pop, save/restore)
+
+**Example (simplified)**:
+
+```asm
+square:
+  addi sp, sp, -16
+  sw ra, 12(sp)
+  ...
+  mul a0, a0, a0
+  ...
+  lw ra, 12(sp)
+  addi sp, sp, 16
+  ret
+```
+
+
+
+#### 🟢 `-O2` (Optimized):
+
+* `square()` is **inlined** into `main()` — no actual function call
+* Stack is not used unless absolutely necessary
+* Variables might be stored in **registers only**
+* Prologue/epilogue might disappear
+
+**Example (simplified)**:
+
+```asm
+main:
+  li a5, 5
+  mul a0, a5, a5
+  ret
+```
+
+✅ Much shorter and faster code
+
+
+
+###  Why This Happens:
+
+| Flag  | Behavior                                                                                                          |
+| ----- | ----------------------------------------------------------------------------------------------------------------- |
+| `-O0` | Keeps code simple and debuggable; uses stack and avoids reordering.                                               |
+| `-O2` | Aggressively inlines functions, uses registers, eliminates unused variables, and reorders instructions for speed. |
+
+
+
+### 📌 Summary
+
+| Aspect         | `-O0`     | `-O2`               |
+| -------------- | --------- | ------------------- |
+| Function calls | Preserved | Inlined (if simple) |
+| Stack usage    | High      | Minimal             |
+| Code size      | Larger    | Smaller             |
+| Speed          | Slower    | Faster              |
+| Debuggable     | ✅ Yes     | ❌ Harder            |
+
+---
+### **✅Output and Code**
+
+![Screenshot from 2025-06-05 12-35-51](https://github.com/user-attachments/assets/302f172c-614d-4bbf-8aa1-db76e70600c9)
+![Screenshot from 2025-06-05 12-36-41](https://github.com/user-attachments/assets/3baba9ba-62a1-454a-b3d7-1e5bda3ff40b)
+![Screenshot from 2025-06-05 12-37-19](https://github.com/user-attachments/assets/996f4d4b-6df3-4379-affd-68ab5fb2c1a9)
+![Screenshot from 2025-06-05 12-37-34](https://github.com/user-attachments/assets/a90f242b-ab4d-45a7-ad87-701ab77b7d31)
+
+---
+
 
 
 
