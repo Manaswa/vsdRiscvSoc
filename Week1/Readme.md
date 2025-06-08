@@ -1084,6 +1084,392 @@ You can print a message inside the ISR by writing to a UART MMIO location (e.g.,
 
 ---
 
+#  **14. <ins> rv32imac vs rv32imc – What’s the “A”?</ins>** 
+
+The **‘A’ (Atomic)** extension in **RV32IMAC** adds support for **atomic memory operations**—critical for writing **safe concurrent code** in multi-threaded or interrupt-based environments like **operating systems, device drivers, or lock-free data structures**.
+
+
+### ✅ **What the 'A' Extension Adds**
+
+It introduces **read-modify-write (RMW)** instructions that **guarantee atomicity**:
+
+### 1. **Load-Reserved / Store-Conditional**
+
+* `lr.w rd, (rs1)` – *Load-Reserved*: reads from memory and reserves it.
+* `sc.w rd, rs2, (rs1)` – *Store-Conditional*: stores only if reservation is still valid.
+
+> 🔁 These are used to implement **mutexes**, **spinlocks**, and **lock-free algorithms**.
+
+### 2. **Atomic Memory Operations (AMO)**
+
+Examples of **RISC-V AMO instructions** (all 32-bit `.w` for RV32):
+
+* `amoadd.w rd, rs2, (rs1)` – Atomically add `rs2` to memory and write original value to `rd`.
+* `amoswap.w` – Swap a register value with memory.
+* `amoxor.w`, `amoand.w`, `amoor.w` – Bitwise atomic operations.
+* `amomin.w`, `amomax.w`, `amominu.w`, `amomaxu.w` – Atomic min/max, signed/unsigned.
+
+
+
+### 🛠️ **Why They’re Useful**
+
+1. **Concurrency**: Allow threads or cores to safely share data **without locks** or **with fine-grained locking**.
+2. **Operating Systems**: Needed to implement:
+
+   * Semaphores
+   * Spinlocks
+   * Thread-safe counters
+3. **Embedded/RTOS**: Handle interrupt-safe and multi-core synchronization.
+
+###  **Visual Explanation of `lr.w` / `sc.w`**
+
+```
+Thread 1 (CPU1)             Memory Location (lock = 0)              Thread 2 (CPU2)
+-----------------          ----------------------------           -------------------
+lr.w x1, (lock)     ─────►  Reads 0 and reserves the address
+li   x2, 1                 
+sc.w x3, x2, (lock) ─────►  If still reserved, writes 1 and x3=0 (success)
+
+Meanwhile...
+
+                            If CPU2 does:
+                            li x4, 1
+                            sw x4, (lock)    ─────► Modifies lock (invalidates CPU1's reservation)
+
+Then CPU1 does:
+sc.w x3, x2, (lock) ─────►  Fails because reservation lost, x3=1 (failure)
+
+🔁 CPU1 retries
+```
+
+
+
+###  **spinlock.c (Bare-metal) Example**
+
+```c
+#define LOCK_ADDR ((volatile unsigned int*)0x10010000)
+volatile int *UART_TX = (volatile int*)0x10000000;
+
+void putchar(char c) {
+    *UART_TX = c;
+}
+
+void puts(const char *s) {
+    while (*s) putchar(*s++);
+}
+
+// Spinlock acquire using lr.w/sc.w
+void acquire_lock(volatile unsigned int *lock) {
+    unsigned int tmp;
+    do {
+        asm volatile (
+            "lr.w %[tmp], (%[addr])\n"
+            "bnez %[tmp], 1f\n"
+            "li %[tmp], 1\n"
+            "sc.w %[tmp], %[tmp], (%[addr])\n"
+            "1:"
+            : [tmp] "=&r"(tmp)
+            : [addr] "r"(lock)
+            : "memory"
+        );
+    } while (tmp != 0);
+}
+
+void release_lock(volatile unsigned int *lock) {
+    *lock = 0;
+}
+
+int main() {
+    acquire_lock(LOCK_ADDR);
+    puts("LOCK ACQUIRED\n");
+    release_lock(LOCK_ADDR);
+    puts("LOCK RELEASED\n");
+
+    while (1);
+}
+```
+
+---
+
+###  Minimal Linker Script (linker.ld)
+
+```ld
+SECTIONS {
+  . = 0x80000000;
+  .text : { *(.text*) }
+  .data : { *(.data*) }
+  .bss  : { *(.bss*) }
+}
+```
+
+---
+
+### ⚙️ GCC Compile
+
+```bash
+riscv32-unknown-elf-gcc -march=rv32imac -mabi=ilp32 -T linker.ld \
+  -nostartfiles -nostdlib -o spinlock.elf spinlock.c
+```
+
+---
+
+###  QEMU Run
+
+```bash
+qemu-system-riscv32 -nographic -machine sifive_e -kernel spinlock.elf
+```
+
+You should see:
+
+```
+LOCK ACQUIRED
+LOCK RELEASED
+```
+
+---
+
+### **✅Output and Code**
+
+![Screenshot from 2025-06-08 00-33-50](https://github.com/user-attachments/assets/a8bab65f-9f2f-49e4-9953-a2b67c689bd4)
+![Screenshot from 2025-06-08 00-35-37](https://github.com/user-attachments/assets/e0dc2cbf-dc30-4da4-8791-f1aa02a9cd11)
+![Screenshot from 2025-06-08 00-36-32](https://github.com/user-attachments/assets/11979456-e958-420b-938d-c82a23ebe0f6)
+
+---
+
+#  **15. <ins>Atomic Test Program</ins>** 
+
+Here’s a **two-pseudo-thread mutex (spinlock) example** using `lr.w`/`sc.w` (load-reserved / store-conditional) for RISC-V `RV32` in **bare-metal C** using inline assembly:
+
+
+### ✅ Spinlock using `lr.w` / `sc.w` (RV32 `A` extension required)
+
+```c
+#define LOCK_ADDR ((volatile unsigned int*)0x10010000)
+#define UART_TX   (*(volatile unsigned int*)0x10000000)
+
+static inline void uart_putchar(char c) {
+    UART_TX = c;
+}
+
+static inline void uart_puts(const char *s) {
+    while (*s) uart_putchar(*s++);
+}
+
+// Spinlock acquire using LR/SC
+void lock(volatile unsigned int *lock_addr) {
+    unsigned int tmp;
+
+    do {
+        __asm__ volatile (
+            "1:\n"
+            "lr.w %0, (%1)\n"      // Load-reserved
+            "bnez %0, 1b\n"        // If already locked (non-zero), retry
+            "li %0, 1\n"
+            "sc.w %0, %0, (%1)\n"  // Try store-conditional
+            "bnez %0, 1b\n"        // If sc.w failed, retry
+            : "=&r"(tmp)
+            : "r"(lock_addr)
+            : "memory"
+        );
+    } while (0);
+}
+
+void unlock(volatile unsigned int *lock_addr) {
+    *lock_addr = 0;
+}
+
+void pseudo_thread_1() {
+    lock(LOCK_ADDR);
+    uart_puts("Thread 1 has lock\n");
+    unlock(LOCK_ADDR);
+}
+
+void pseudo_thread_2() {
+    lock(LOCK_ADDR);
+    uart_puts("Thread 2 has lock\n");
+    unlock(LOCK_ADDR);
+}
+
+int main() {
+    *LOCK_ADDR = 0;  // Init lock
+
+    pseudo_thread_1();
+    pseudo_thread_2();
+
+    while (1);
+    return 0;
+}
+```
+
+
+
+### Breakdown
+
+| Part               | Description                                                                |
+| ------------------ | -------------------------------------------------------------------------- |
+| `lr.w`             | Load-reserved (marks the address for atomic check).                        |
+| `sc.w`             | Store-conditional (stores only if no other core has modified the address). |
+| `bnez`             | Retry logic to implement a spinlock.                                       |
+| `volatile` pointer | Ensures the compiler does not optimize access to the memory-mapped lock.   |
+| UART prints        | To simulate thread entry/exit/output to console.                           |
+
+---
+
+### 🧪 Compile and Run (assumes linker script & platform ready)
+
+```bash
+riscv32-unknown-elf-gcc -march=rv32imac -mabi=ilp32 -T linker.ld \
+  -nostdlib -nostartfiles -o mutex.elf mutex.c
+```
+
+Then simulate:
+
+```bash
+qemu-system-riscv32 -nographic -machine sifive_e -kernel mutex.elf
+```
+
+---
+
+### **✅Output and Code**
+
+![Screenshot from 2025-06-08 00-45-17](https://github.com/user-attachments/assets/c38d3955-9408-4d16-abe6-b88741992202)
+![Screenshot from 2025-06-08 00-45-26](https://github.com/user-attachments/assets/90a5ef12-e312-4a2a-a53e-81f2a411421f)
+![Screenshot from 2025-06-08 00-54-22](https://github.com/user-attachments/assets/a906ff21-b0bb-477d-aff2-3a6bd04cf77f)
+![Screenshot from 2025-06-08 01-14-10](https://github.com/user-attachments/assets/c3f2706c-3cff-4e95-88d8-dfc8bf8c409d)
+![Screenshot from 2025-06-08 01-18-27](https://github.com/user-attachments/assets/61993305-f667-42ce-abd3-a6f69a6537a1)
+
+---
+
+#  **16. <ins> Using Newlib printf Without an OS</ins>** 
+
+To **retarget `_write()`** so that `printf()` or `puts()` sends characters to a memory-mapped UART, follow this method:
+
+
+
+### ✅ Step-by-Step Solution
+
+###  1. **Define the `_write` function** (in `syscalls.c`):
+
+```c
+#define UART_TX (*(volatile unsigned int*)0x10000000)
+
+int _write(int fd, const char *buf, int len) {
+    for (int i = 0; i < len; i++) {
+        UART_TX = buf[i];  // Send each character to UART
+    }
+    return len;
+}
+```
+
+
+
+###  2. **Use standard functions like `printf()`**
+
+In `main.c`:
+
+```c
+#include <stdio.h>
+
+int main() {
+    printf("Hello from UART!\n");
+    while (1);
+}
+```
+
+
+###  3. **Compile and link with custom `syscalls.c`**
+
+Use the `-nostartfiles -nostdlib` flags:
+
+```bash
+riscv32-unknown-elf-gcc -march=rv32imac -mabi=ilp32 \
+  -T linker.ld -nostartfiles -nostdlib \
+  -o uart.elf main.c syscalls.c
+```
+
+Make sure your `linker.ld` maps `.text` to a proper flash address and `.data` to RAM.
+
+
+
+###  Explanation
+
+* `_write()` is a **standard syscall used by `printf()` internally**. By overriding it, you tell `libc` where to output.
+* You ignore the `fd` (file descriptor) because on bare-metal, there are no actual file systems — UART is the "console."
+* Writing to `0x10000000` assumes your platform's UART TX register is memory-mapped there (e.g., SiFive cores under QEMU).
+
+---
+
+### **✅Output and Code**
+![Screenshot from 2025-06-08 10-55-42](https://github.com/user-attachments/assets/18449a8b-3372-461d-95af-db2bf1e85135)
+![Screenshot from 2025-06-08 11-11-06](https://github.com/user-attachments/assets/fef14819-33bb-4397-aca3-ec1c0f441292)
+![Screenshot from 2025-06-08 11-13-40](https://github.com/user-attachments/assets/9e3dd7b6-1f35-4562-833e-80ea79dc0735)
+
+---
+
+#  **17. <ins>Endianness & Struct Packing</ins>** 
+
+**RV32 is little-endian by default**.
+
+To **verify byte ordering**, you can use a C union that overlays a 32-bit integer and a byte array. Here's the **union trick** to check endianness:
+
+
+
+### ✅ C Code to Check Endianness on RV32:
+
+```c
+#include <stdint.h>
+#include <stdio.h>
+
+int main() {
+    union {
+        uint32_t i;
+        uint8_t bytes[4];
+    } u;
+
+    u.i = 0x01020304;
+
+    printf("Byte order:\n");
+    for (int i = 0; i < 4; i++) {
+        printf("bytes[%d] = 0x%02x\n", i, u.bytes[i]);
+    }
+
+    return 0;
+}
+```
+
+
+
+###  Expected Output on **Little-Endian** (like RV32):
+
+```
+bytes[0] = 0x04
+bytes[1] = 0x03
+bytes[2] = 0x02
+bytes[3] = 0x01
+```
+
+This means the **least significant byte is stored first** in memory — confirming **little-endian** format.
+
+
+
+###  Bare-metal version (if no `printf` available)
+
+You could use `putchar()` and convert each byte to hex manually, or send it out via UART if `stdio` is not linked.
+
+---
+
+### **✅Output and Code**
+
+![Screenshot from 2025-06-08 11-44-04](https://github.com/user-attachments/assets/08513a27-646c-4827-a18d-246031b4e8e6)
+![Screenshot from 2025-06-08 11-44-54](https://github.com/user-attachments/assets/beb4a60d-b80a-429d-b6b5-6a95e72acd92)
+
+---
+
+
+
+
+
+
 
 
 
