@@ -633,6 +633,456 @@ main:
 
 ---
 
+#  **9. <ins> Inline Assembly Basics</ins>** 
+
+
+### ✅ C Function to Read `cycle` CSR
+
+```c
+unsigned int read_cycle() {
+    unsigned int cycle;
+    asm volatile ("csrr %0, cycle" : "=r"(cycle));
+    return cycle;
+}
+```
+
+###  Explanation
+
+### 🔹 `asm volatile`
+
+* `asm`: Tells the compiler this is an inline assembly block.
+* `volatile`: Prevents the compiler from optimizing away or reordering this instruction, which is important for hardware timing-related instructions.
+
+### 🔹 `"csrr %0, cycle"`
+
+* `csrr` = "Control and Status Register Read"
+* `%0` is a placeholder for the first output operand, i.e., where the result goes
+* `cycle` is a **named alias** for CSR address `0xC00`
+
+> You could also use `"csrr %0, 0xC00"` if the name isn't available.
+
+### 🔹 `: "=r"(cycle)`
+
+* This is the **output operand** section of the inline assembly.
+
+#### Breakdown:
+
+* `=` → This tells the compiler it’s an output.
+* `r` → Use a general-purpose **register**.
+* `(cycle)` → Store the result of the `csrr` instruction in the `cycle` variable.
+
+
+
+### 🧪 Example Usage
+
+```c
+#include <stdio.h>
+
+unsigned int read_cycle();
+
+int main() {
+    unsigned int c = read_cycle();
+    printf("Cycle count: %u\n", c);
+    return 0;
+}
+```
+
+> If you're doing bare-metal development, `printf()` might not work unless redirected to UART or semihosting.
+
+
+
+### 📌 Summary of Inline Assembly Constraints
+
+| Constraint | Meaning                      |
+| ---------- | ---------------------------- |
+| `=`        | Output operand               |
+| `r`        | Any general-purpose register |
+| `(var)`    | Corresponding C variable     |
+
+---
+
+#  **10. <ins>Memory-Mapped I/O Demo</ins>**
+
+
+### ✅ C Code Snippet: Toggle GPIO Register
+
+```c
+#include <stdint.h>
+
+// Define the GPIO address as a volatile pointer
+#define GPIO_REG (*(volatile uint32_t*)0x10012000)
+
+void toggle_gpio() {
+    GPIO_REG = 1;        // Set the GPIO pin (e.g., high)
+    for (volatile int i = 0; i < 100000; ++i); // Delay loop
+    GPIO_REG = 0;        // Clear the GPIO pin (e.g., low)
+}
+```
+
+
+### 🔐 Preventing Compiler Optimization
+
+The key is:
+
+### 🔸 `volatile`
+
+* Tells the compiler:
+
+  > “Do not optimize or cache reads/writes to this address.”
+* Without `volatile`, the compiler might skip writes if it thinks the memory isn't used.
+
+### 🔸 `for (volatile int i = ...)`
+
+* This prevents the delay loop from being optimized away.
+
+---
+
+### 🔁 Optional: Looping Toggle
+
+To toggle it repeatedly:
+
+```c
+void _start() {
+    while (1) {
+        toggle_gpio();
+    }
+}
+```
+
+---
+
+### ⚙️ Compiling & Running
+
+Assume you have a `linker.ld` and `riscv32-unknown-elf-gcc`:
+
+```bash
+riscv32-unknown-elf-gcc -march=rv32imac -mabi=ilp32 -T linker.ld \
+  -nostdlib -o gpio_toggle.elf gpio_toggle.c
+```
+
+Run with QEMU:
+
+```bash
+qemu-system-riscv32 -nographic -machine sifive_e -kernel gpio_toggle.elf
+```
+
+---
+
+#  **11. <ins>Linker Script 101</ins>** 
+
+
+### ✅ Minimal Linker Script (`linker.ld`)
+
+```ld
+SECTIONS {
+  /* Code (Flash) at address 0x00000000 */
+  .text 0x00000000 : {
+    *(.text*)
+  }
+
+  /* Initialized data (SRAM) at address 0x10000000 */
+  .data 0x10000000 : {
+    *(.data*)
+  }
+
+  /* Uninitialized data (BSS) follows .data in RAM */
+  .bss : {
+    *(.bss*)
+    *(COMMON)
+  }
+}
+```
+
+
+###  How to Use It
+
+Compile your C file with:
+
+```bash
+riscv32-unknown-elf-gcc -march=rv32imc -mabi=ilp32 -T linker.ld -nostdlib -o myprog.elf myprog.c
+```
+
+Run it with QEMU:
+
+```bash
+qemu-system-riscv32 -nographic -machine sifive_e -kernel myprog.elf
+```
+
+
+###  Explanation: Flash vs SRAM Addressing
+
+| Section | Memory Type | Address      | Why?                                                                           |
+| ------- | ----------- | ------------ | ------------------------------------------------------------------------------ |
+| `.text` | Flash / ROM | `0x00000000` | Program code lives in **non-volatile Flash** so it's retained after power off. |
+| `.data` | SRAM        | `0x10000000` | Data must be **read/write at runtime**, so it's placed in **RAM (SRAM)**.      |
+
+### Note:
+
+* On real hardware, `.data` is usually **copied from Flash to RAM** during startup.
+* `.bss` is zero-initialized in RAM.
+
+---
+
+### **✅Output and Code**
+
+![Screenshot from 2025-06-05 17-22-11](https://github.com/user-attachments/assets/63ac0a71-2980-499e-a880-2dbc453a3a63)
+
+---
+
+
+#  **12. <ins>Start-up Code & crt0</ins>** 
+
+### ✅ What `crt0.S` Does in a Bare-Metal RISC-V Program
+
+`crt0.S` (also known as the "C runtime zero") is **startup assembly code** that's executed **before `main()`**. It sets up the **runtime environment** needed for your C code to run properly.
+
+
+###  Typical Responsibilities of `crt0.S`
+
+1. **Set up the stack pointer**
+
+   * The CPU doesn’t know where the stack is. `crt0.S` sets it up, often like:
+
+     ```asm
+     la sp, _stack_top
+     ```
+
+2. **Zero the `.bss` section**
+
+   * `.bss` contains uninitialized global/static variables which must be zeroed manually:
+
+     ```asm
+     la a0, __bss_start
+     la a1, __bss_end
+     loop:
+       beq a0, a1, done
+       sw zero, 0(a0)
+       addi a0, a0, 4
+       j loop
+     done:
+     ```
+
+3. **Copy `.data` from Flash to RAM** (if applicable)
+
+   * For initialized globals:
+
+     ```asm
+     la a0, _data_load_start
+     la a1, _data_start
+     la a2, _data_end
+     loop_copy:
+       beq a1, a2, done_copy
+       lw t0, 0(a0)
+       sw t0, 0(a1)
+       addi a0, a0, 4
+       addi a1, a1, 4
+       j loop_copy
+     done_copy:
+     ```
+
+4. **Call `main()`**
+
+   ```asm
+   call main
+   ```
+
+5. **Hang if `main()` returns**
+
+   ```asm
+   loop_forever:
+     j loop_forever
+   ```
+
+
+
+###  Where to Get `crt0.S`
+
+* ✅ **Newlib** provides portable `crt0.S` implementations under `libgloss/`:
+
+  * GitHub: [newlib/libgloss/riscv/crt0.S](https://sourceware.org/git/?p=newlib-cygwin.git;a=blob;f=libgloss/riscv/crt0.S)
+
+* ✅ **Platform SDKs / BSPs (Board Support Packages)**:
+
+  * SiFive Freedom E SDK
+  * Kendryte SDK (for K210 chips)
+  * Renode simulation templates
+
+* ✅ **Write your own** if you’re learning or on custom hardware.
+
+
+
+###  Summary
+
+| Feature              | Purpose                              |
+| -------------------- | ------------------------------------ |
+| Set stack pointer    | For function calls & local variables |
+| Zero `.bss`          | C standard compliance                |
+| Copy `.data`         | Load initialized globals             |
+| Call `main()`        | Start the C program                  |
+| Trap if `main` exits | Infinite loop                        |
+
+---
+
+#  **13. <ins>Interrupt Primer</ins>** 
+
+### ✅ Step-by-Step: MTIP Setup with a Simple ISR
+
+### What is MTIP?
+
+* MTIP (Machine Timer Interrupt Pending) gets set when `mtime >= mtimecmp`.
+* You must:
+
+  1. Configure the CLINT (`mtimecmp` and `mtime`)
+  2. Enable timer interrupt in `mie`
+  3. Enable global interrupts in `mstatus`
+  4. Set `mtvec` to your handler
+
+
+
+###  1. `main.c` – Timer Setup and Handler
+
+```c
+#include <stdint.h>
+
+// Memory-mapped CLINT registers (QEMU/Spike default)
+#define MTIME      (*(volatile uint64_t*)(0x0200BFF8))
+#define MTIMECMP   (*(volatile uint64_t*)(0x02004000))
+
+volatile int tick = 0;
+
+void enable_mtip() {
+    // Schedule timer interrupt (e.g., 100000 ticks in the future)
+    MTIMECMP = MTIME + 100000;
+
+    // Enable machine-timer interrupt
+    asm volatile("csrs mie, %0" :: "r"(1 << 7));
+
+    // Enable global interrupt
+    asm volatile("csrs mstatus, %0" :: "r"(1 << 3));
+
+    // Set mtvec to address of timer handler (direct mode)
+    extern void timer_isr();
+    asm volatile("la t0, timer_isr\ncsrw mtvec, t0");
+}
+
+int main() {
+    enable_mtip();
+    while (1) {
+        // Tick updated by interrupt
+        if (tick >= 5) {
+            // Done after 5 ticks
+            while (1);
+        }
+    }
+}
+```
+
+
+###  2. `isr.S` – Timer Interrupt Handler in ASM
+
+```asm
+.section .text
+.global timer_isr
+timer_isr:
+    // Save registers
+    addi sp, sp, -16
+    sw ra, 12(sp)
+    sw t0, 8(sp)
+    sw t1, 4(sp)
+
+    // Acknowledge timer interrupt: set mtimecmp = mtime + 100000
+    li t0, 0x0200BFF8       # mtime
+    ld t1, 0(t0)
+    li t0, 0x02004000       # mtimecmp
+    addi t1, t1, 100000
+    sd t1, 0(t0)
+
+    // Increment C variable 'tick'
+    la t0, tick
+    lw t1, 0(t0)
+    addi t1, t1, 1
+    sw t1, 0(t0)
+
+    // Restore and return
+    lw t1, 4(sp)
+    lw t0, 8(sp)
+    lw ra, 12(sp)
+    addi sp, sp, 16
+    mret
+```
+
+
+### 3. `linker.ld` – Minimal Linker Script
+
+```ld
+ENTRY(_start)
+
+MEMORY
+{
+  RAM (rwx) : ORIGIN = 0x80000000, LENGTH = 64K
+}
+
+SECTIONS
+{
+  . = ORIGIN(RAM);
+
+  .text : {
+    *(.text*)
+    *(.rodata*)
+  } > RAM
+
+  .data : {
+    *(.data*)
+  } > RAM
+
+  .bss : {
+    *(.bss*)
+    *(COMMON)
+  } > RAM
+}
+```
+
+
+### 🏗 4. Compile and Run (QEMU)
+
+### 🔧 Compile:
+
+```bash
+riscv32-unknown-elf-gcc -march=rv32imac -mabi=ilp32 -T linker.ld \
+  -nostartfiles -nostdlib -o timer.elf main.c isr.S
+```
+
+###  Run on QEMU:
+
+```bash
+qemu-system-riscv32 -nographic -machine sifive_e -kernel timer.elf
+```
+
+You can print a message inside the ISR by writing to a UART MMIO location (e.g., `0x10000000`).
+
+
+
+###  Summary
+
+| Component     | Action                        |
+| ------------- | ----------------------------- |
+| `mtimecmp`    | Set to future value           |
+| `mie` CSR     | Enable timer interrupt        |
+
+| `mstatus` CSR | Enable global interrupts      |
+| `mtvec` CSR   | Point to your ISR             |
+| `ISR`         | Acknowledge + action + `mret` |
+
+---
+### **✅Output and Code**
+
+![Screenshot from 2025-06-06 20-04-07](https://github.com/user-attachments/assets/d2a7fcd7-872c-450e-b57f-2e295607e194)
+![Screenshot from 2025-06-06 20-12-18](https://github.com/user-attachments/assets/f534f716-a517-4247-a62a-02ea8ff1bdad)
+![Screenshot from 2025-06-06 20-15-45](https://github.com/user-attachments/assets/40b697f3-d9db-4ac2-a292-1b62b453d428)
+![Screenshot from 2025-06-06 20-18-42](https://github.com/user-attachments/assets/e3e319ed-da57-4729-8275-6765594e23fd)
+![Screenshot from 2025-06-06 20-24-40](https://github.com/user-attachments/assets/f79b1118-8627-4420-a5fe-25a71bd909f6)
+
+---
 
 
 
