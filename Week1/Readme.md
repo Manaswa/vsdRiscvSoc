@@ -1,4 +1,4 @@
-# <ins> **1. Install & Sanity-Check the Toolchain** </ins>
+#  **1. <ins>Install & Sanity-Check the Toolchain</ins>** 
 
  ### ✅ 1. **Unpack the `.tar.gz` File**
 
@@ -329,4 +329,194 @@ So for:
 * **gp, tp (x3, x4):** Used internally (global/thread pointer)
 
 ---
+
+#  **6. <ins>Stepping with GDB</ins>** 
+
+### ✅ Step-by-Step GDB Walkthrough
+
+Assuming you have an ELF file called `hello.elf`:
+
+### 🔹 1. Start GDB
+
+```bash
+riscv32-unknown-elf-gdb hello.elf
+```
+
+You’ll enter the GDB prompt:
+
+```
+(gdb)
+```
+
+### 🔹 2. Set a Breakpoint at `main`
+
+```gdb
+(gdb) break main
+```
+
+You should see:
+
+```
+Breakpoint 1 at 0x00010074: file hello.c, line 1.
+```
+
+### 🔹 3. Start Running the Program
+
+**If running in a simulator like QEMU:**
+
+You need to start QEMU with GDB support and connect it — ask me if you want that.
+
+**If using `gdb` without execution support** (e.g., no simulator), you can still **step through** the ELF statically:
+
+```gdb
+(gdb) layout asm      # (optional) shows disassembly layout in terminal UI
+(gdb) start
+```
+
+### 🔹 4. Step Through Instructions
+
+```gdb
+(gdb) stepi      # Step one instruction
+(gdb) nexti      # Step over function calls
+```
+
+or
+
+```gdb
+(gdb) step       # Step into C function
+(gdb) next       # Step over C function
+```
+
+
+### 🔹 5. Inspect Registers
+
+```gdb
+(gdb) info registers
+```
+
+Output looks like:
+
+```
+ra             0x00010078
+sp             0x80001000
+a0             0x0
+...
+```
+
+You can also inspect individual registers:
+
+```gdb
+(gdb) print $a0
+(gdb) print $sp
+```
+
+###  Example GDB Session
+
+```bash
+riscv32-unknown-elf-gdb hello.elf
+```
+
+Then:
+
+
+```gdb
+(gdb) break main
+(gdb) run
+(gdb) stepi
+(gdb) info registers
+```
+---
+### **✅Output and Code**
+![Screenshot from 2025-06-04 00-30-28](https://github.com/user-attachments/assets/a94031c4-ebeb-4972-bb44-65c8eb3c7d4f)
+![Screenshot from 2025-06-04 00-30-51](https://github.com/user-attachments/assets/9d9390e5-73e1-4d96-983e-064737c70729)
+![Screenshot from 2025-06-04 13-57-50](https://github.com/user-attachments/assets/fd773271-7eac-4763-8f71-7af81d24db4b)
+![Screenshot from 2025-06-04 13-58-03](https://github.com/user-attachments/assets/43ffbfe6-bab8-4ea9-a027-106ab158e627)
+![Screenshot from 2025-06-04 13-58-24](https://github.com/user-attachments/assets/6e978586-3e58-46f4-9601-5b3dde26c220)
+![Screenshot from 2025-06-04 14-00-10](https://github.com/user-attachments/assets/bc364cdd-0862-4a1f-88f8-04b05b738dd9)
+![Screenshot from 2025-06-04 14-00-47](https://github.com/user-attachments/assets/1865c92e-0bab-475b-a880-aede239ebaf4)
+![Screenshot from 2025-06-04 14-09-37](https://github.com/user-attachments/assets/6f191447-5f5a-4387-a243-9cc8ee332417)
+
+---
+
+#  **7. <ins>Running Under an Emulator</ins>** 
+
+### ✅ OPTION 1: Using QEMU (Recommended for UART console)
+
+Assuming:
+
+* You compiled your ELF with a `putchar()`/`printf()` that writes to `UART` mapped at `0x10000000` (e.g., SiFive UART)
+* You have a working `main()` and `-T linker.ld`
+
+### 🛠 QEMU Command
+
+```bash
+qemu-system-riscv32 \
+  -nographic \
+  -machine sifive_e \
+  -kernel your_baremetal.elf
+```
+
+### ✅ UART Output
+
+* QEMU will automatically emulate the SiFive UART at `0x10000000`
+* Any `putchar()` or `printf()` writing to that address will print **directly to your terminal**
+* No need for `-S -gdb` unless you're debugging
+
+
+
+### ✅ OPTION 2: Using Spike (requires proxy kernel or test device emulation)
+
+Spike is **not ideal for UART output from raw bare-metal**, unless:
+
+### A. You are using a **proxy kernel (PK)**:
+
+```bash
+spike pk your_program.elf
+```
+
+…but that's **not bare-metal** anymore — that’s "newlib + pk" environment.
+
+### B. You're using **Spike with MMIO traps** (advanced):
+
+You can write a Spike-compatible MMIO trap model to print when writing to `0x10000000`, but that involves:
+
+* Custom Spike build with `--enable-commitlog`
+* Writing traps in C++
+
+This is **non-trivial** and not ideal unless you're developing on real hardware.
+
+
+
+### 🔧 Example: UART Write in Bare-Metal C
+
+If you're using SiFive's UART at `0x10000000`:
+
+```c
+#define UART_TX  (*(volatile unsigned int *)0x10000000)
+
+void putchar(char c) {
+    UART_TX = c;
+}
+
+int main() {
+    const char *msg = "Hello from RISC-V UART!\n";
+    while (*msg) putchar(*msg++);
+    while (1); // Loop forever
+}
+```
+---
+### **✅Output and Code**
+
+
+![Screenshot from 2025-06-04 16-48-49](https://github.com/user-attachments/assets/1bcc65cc-5e75-442d-932f-3300f0389893)
+![Screenshot from 2025-06-04 17-41-26](https://github.com/user-attachments/assets/5e725322-a877-4060-ac1e-cc150aa2c7e4)
+![Screenshot from 2025-06-04 17-42-57](https://github.com/user-attachments/assets/815e7aab-e39e-4ec1-9305-c8c083cec0c2)
+![Screenshot from 2025-06-04 17-43-17](https://github.com/user-attachments/assets/23563a26-d3b0-4197-96dd-f277426db65e)
+
+---
+
+
+
+
+
 
