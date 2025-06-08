@@ -17,7 +17,7 @@ sudo mkdir -p /opt/riscv
 sudo tar -xvzf riscv-toolchain-rv32imac-x86_64-ubuntu.tar.gz -C /opt/riscv
 ```
 
----
+
 
  ### ✅ 2. **Add Toolchain to `PATH`**
 
@@ -45,7 +45,7 @@ To make it **permanent**, add that line to your shell config:
   source ~/.zshrc
   ```
 
----
+
 
 ### ✅ 3. **Verify Installation**
 
@@ -68,7 +68,7 @@ riscv32-unknown-elf-gdb --version
 ---
 
 
-# <ins> **2. Compile “Hello, RISC-V”** </ins>
+#  **2. <ins> Compile “Hello, RISC-V”</ins>** 
 
 ### ✅ Minimal C Program (`hello.c`)
 
@@ -82,7 +82,7 @@ int main() {
 
 If you're targeting a **bare-metal** RV32IMC system (no OS), this is typical.
 
----
+
 
 ### ✅ GCC Cross-Compilation Command
 
@@ -101,7 +101,7 @@ riscv32-unknown-elf-gcc -march=rv32imc -mabi=ilp32 -nostdlib -o hello.elf hello.
 | `-nostdlib`      | No standard library (for bare-metal, no `libc`, no `crt0`) |
 | `-o hello.elf`   | Output file                                                |
 
----
+
 
 ### ✅ Optional: Inspect the ELF
 
@@ -125,8 +125,8 @@ riscv32-unknown-elf-readelf -h hello.elf
 
 ---
 
+#  **3. <ins>From C to Assembly</ins>** 
 
----
 
 ### ✅ 1. Generate the `.s` File (Assembly Output)
 
@@ -138,9 +138,8 @@ riscv32-unknown-elf-gcc -march=rv32imc -mabi=ilp32 -S hello.c -o hello.s
 
 This will generate `hello.s`, the **assembly version** of your C code.
 
----
 
-## 📄 2. Example: Assembly Output for a Minimal `main`
+###  2. Example: Assembly Output for a Minimal `main`
 
 ### Input C code (`hello.c`):
 
@@ -167,9 +166,9 @@ main:
     ret                     # Return to caller
 ```
 
----
 
-## 🧠 3. Prologue and Epilogue Explained
+
+### 3. Prologue and Epilogue Explained
 
 | Part         | Assembly                                      | Purpose                                                               |
 | ------------ | --------------------------------------------- | --------------------------------------------------------------------- |
@@ -180,26 +179,154 @@ main:
 > This is standard function call convention on RISC-V (RV32I-based ABI).
 
 ---
+### **✅Output and Code**
 
-## 🔎 Optional: Want Even Cleaner Assembly?
-
-Disable optimizations:
-
-```bash
-riscv32-unknown-elf-gcc -march=rv32imc -mabi=ilp32 -S -O0 hello.c -o hello.s
-```
-
-With optimizations (`-O2`), the compiler may **skip stack setup** entirely for such a trivial function.
+![Screenshot from 2025-06-03 21-49-07](https://github.com/user-attachments/assets/cfc7fbd8-a6e6-4a3e-b032-5f7a3649a209)
+![Screenshot from 2025-06-03 21-52-20](https://github.com/user-attachments/assets/01ebe261-9a7f-4ee5-b8d5-eed2f6148bc1)
 
 ---
 
-Let me know if you’d like to explore:
-
-* How function arguments are passed in RV32
-* How recursion works in assembly
-* Disassembly of more complex programs (e.g., loops, structs, etc.)
+#  **4. <ins>Hex Dump & Disassembly</ins>** 
 
 
 
+### ✅ 1. Convert ELF to Raw Hex
 
+### Option A: Use `objcopy` to get raw binary
+
+```bash
+riscv32-unknown-elf-objcopy -O binary hello.elf hello.bin
+```
+
+### Option B: Get Intel HEX (if needed for flashing tools)
+
+```bash
+riscv32-unknown-elf-objcopy -O ihex hello.elf hello.hex
+```
+
+You can view the hex with:
+
+```bash
+hexdump -C hello.bin
+```
+
+Or:
+
+```bash
+cat hello.hex
+```
+
+
+
+### ✅ 2. Disassemble with `objdump`
+
+Use:
+
+```bash
+riscv32-unknown-elf-objdump -d hello.elf
+```
+
+This shows **disassembled machine code**.
+
+You can add symbols with:
+
+```bash
+riscv32-unknown-elf-objdump -d -S hello.elf
+```
+
+That shows interleaved **C code and assembly**, if debug info is included (`-g` during compile).
+
+
+### ✅ 3. Understand `objdump` Columns
+
+Example output:
+
+```asm
+00010074 <main>:
+   10074:   1141        addi    sp,sp,-16
+   10076:   c606        sw      ra,12(sp)
+   10078:   4501        li      a0,0
+   1007a:   40b2        lw      ra,12(sp)
+   1007c:   0141        addi    sp,sp,16
+   1007e:   8082        ret
+```
+
+| Column           | Meaning                                      |
+| ---------------- | -------------------------------------------- |
+| `10074:`         | Address in memory (offset in ELF section)    |
+| `1141`           | Machine code (hex encoding of instruction)   |
+| `addi sp,sp,-16` | Assembly instruction (disassembled mnemonic) |
+
+So for:
+
+```
+10074:   1141        addi    sp,sp,-16
+```
+
+* `10074` = address
+* `1141` = binary opcodes (hex)
+* `addi sp,sp,-16` = instruction
+
+---
+### **✅Output and Code**
+
+![Screenshot from 2025-06-03 23-31-11](https://github.com/user-attachments/assets/582918af-a562-463a-9d15-fb4e1c4360f0)
+![Screenshot from 2025-06-03 23-33-14](https://github.com/user-attachments/assets/031dd86f-1f77-486f-9bfb-ae2d51a9b6bc)
+
+---
+
+
+#  **5. <ins>ABI & Register Cheat-Sheet</ins>** 
+
+
+### ✅ RV32I Register Table
+
+| xN  | ABI Name     | Role (Calling Convention)                     |
+| --- | ------------ | --------------------------------------------- |
+| x0  | `zero`       | Constant zero                                 |
+| x1  | `ra`         | Return address (used by `call` and `ret`)     |
+| x2  | `sp`         | Stack pointer                                 |
+| x3  | `gp`         | Global pointer                                |
+| x4  | `tp`         | Thread pointer                                |
+| x5  | `t0`         | Temporary register (caller-saved)             |
+| x6  | `t1`         | Temporary register (caller-saved)             |
+| x7  | `t2`         | Temporary register (caller-saved)             |
+| x8  | `s0` or `fp` | Saved register / frame pointer (callee-saved) |
+| x9  | `s1`         | Saved register (callee-saved)                 |
+| x10 | `a0`         | Argument 0 / return value 0                   |
+| x11 | `a1`         | Argument 1 / return value 1                   |
+| x12 | `a2`         | Argument 2                                    |
+| x13 | `a3`         | Argument 3                                    |
+| x14 | `a4`         | Argument 4                                    |
+| x15 | `a5`         | Argument 5                                    |
+| x16 | `a6`         | Argument 6                                    |
+| x17 | `a7`         | Argument 7                                    |
+| x18 | `s2`         | Saved register (callee-saved)                 |
+| x19 | `s3`         | Saved register (callee-saved)                 |
+| x20 | `s4`         | Saved register (callee-saved)                 |
+| x21 | `s5`         | Saved register (callee-saved)                 |
+| x22 | `s6`         | Saved register (callee-saved)                 |
+| x23 | `s7`         | Saved register (callee-saved)                 |
+| x24 | `s8`         | Saved register (callee-saved)                 |
+| x25 | `s9`         | Saved register (callee-saved)                 |
+| x26 | `s10`        | Saved register (callee-saved)                 |
+| x27 | `s11`        | Saved register (callee-saved)                 |
+| x28 | `t3`         | Temporary register (caller-saved)             |
+| x29 | `t4`         | Temporary register (caller-saved)             |
+| x30 | `t5`         | Temporary register (caller-saved)             |
+| x31 | `t6`         | Temporary register (caller-saved)             |
+
+---
+
+### 📌 Summary of Roles
+
+* **zero (x0):** Always 0 (hardwired)
+* **ra (x1):** Return address from function calls
+* **sp (x2):** Stack pointer
+* **a0–a7 (x10–x17):** Argument and return value registers
+* **t0–t6 (x5–x7, x28–x31):** Temporaries (not preserved by callee)
+* **s0–s11 (x8–x9, x18–x27):** Saved registers (callee must preserve)
+* **gp, tp (x3, x4):** Used internally (global/thread pointer)
+
+---
 
